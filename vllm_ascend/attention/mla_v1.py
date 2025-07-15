@@ -943,7 +943,7 @@ class AscendMLAImpl(MLAAttentionImpl):
         q_pe: torch.Tensor,
         k_nope: torch.Tensor,
         k_pe: torch.Tensor,
-        kv_c_and_k_pe_cache: Tuple[torch.Tensor],
+        kv_c_and_k_pe_cache: Tuple[torch.Tensor, torch.Tensor],
         attn_metadata: AscendMLAMetadata,
         enable_multistream_mla: bool = False,
     ) -> torch.Tensor:
