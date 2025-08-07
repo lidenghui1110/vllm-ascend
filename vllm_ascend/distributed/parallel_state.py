@@ -10,6 +10,7 @@ _MC2: Optional[GroupCoordinator] = None
 _OTP: Optional[GroupCoordinator] = None
 
 
+
 def get_mc2_group() -> GroupCoordinator:
     assert _MC2 is not None, ("mc2 group is not initialized")
     return _MC2

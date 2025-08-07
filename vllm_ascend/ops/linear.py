@@ -6,21 +6,20 @@ from torch.nn.parameter import Parameter, UninitializedParameter
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.linear import LinearBase
 from vllm.model_executor.layers.linear import (
-    set_weight_attrs, WEIGHT_LOADER_V2_SUPPORTED)
+    RowParallelLinear, set_weight_attrs, WEIGHT_LOADER_V2_SUPPORTED)
 from vllm.model_executor.parameter import BasevLLMParameter
 from vllm.distributed import (divide, get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size,
                               split_tensor_along_last_dim,
                               tensor_model_parallel_all_gather,
                               tensor_model_parallel_all_reduce)
-from vllm_ascend import ascend_config
+
 from vllm_ascend.distributed.parallel_state import get_otp_group
 from vllm_ascend.ascend_config import get_ascend_config
 
 
-class Oproj_RowParallelLinear(LinearBase):
+class Oproj_RowParallelLinear(RowParallelLinear):
     """Custom oproj Linear layer with row parallelism.
-        Base on vllm.model_executor.layers -> linear.py -> RowParallelLinear
 
     The linear layer is defined as Y = XA + b. A is parallelized along
     its first dimension and X along its second dimension as:
@@ -65,6 +64,8 @@ class Oproj_RowParallelLinear(LinearBase):
         *,
         return_bias: bool = True,
     ):
+        nn.Module.__init__(self)
+
         ascend_config = get_ascend_config()
         self._enable_otp = True \
             if ascend_config.oproj_tensor_parallel_size is not None else False
@@ -84,13 +85,19 @@ class Oproj_RowParallelLinear(LinearBase):
         self.output_size_per_partition = output_size
         self.output_partition_sizes = [output_size]
 
-        super().__init__(input_size,
-                         output_size,
-                         skip_bias_add,
-                         params_dtype,
-                         quant_config,
-                         prefix,
-                         return_bias=return_bias)
+        self.input_size = input_size
+        self.output_size = output_size
+        self.skip_bias_add = skip_bias_add
+        if params_dtype is None:
+            params_dtype = torch.get_default_dtype()
+        self.params_dtype = params_dtype
+        if quant_config is None:
+            self.quant_method: Optional[
+                QuantizeMethodBase] = UnquantizedLinearMethod()
+        else:
+            self.quant_method = quant_config.get_quant_method(self,
+                                                              prefix=prefix)
+        self.return_bias = return_bias
 
         self.input_is_parallel = input_is_parallel
         self.reduce_results = reduce_results
@@ -158,16 +165,6 @@ class Oproj_RowParallelLinear(LinearBase):
         assert param_data.shape == loaded_weight.shape
         param_data.copy_(loaded_weight)
 
-    def weight_loader_v2(self, param: BasevLLMParameter,
-                         loaded_weight: torch.Tensor):
-
-        # Special case for loading scales off disk, which often do not
-        # have a shape (such as in the case of AutoFP8).
-        if len(loaded_weight.shape) == 0:
-            assert loaded_weight.numel() == 1
-            loaded_weight = loaded_weight.reshape(1)
-
-        param.load_row_parallel_weight(loaded_weight=loaded_weight)
 
     def forward(
         self,
