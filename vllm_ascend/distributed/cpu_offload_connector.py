@@ -182,13 +182,30 @@ class CPUOffloadingConnectorScheduler:
 
     def build_connector_meta(
             self, scheduler_output: SchedulerOutput) -> KVConnectorMetadata:
-        num_tokens = {
-            req.req_id:
-            req.num_computed_tokens +
-            scheduler_output.num_scheduled_tokens[req.req_id]
-            for req in chain(scheduler_output.scheduled_new_reqs,
-                             scheduler_output.scheduled_cached_reqs)
-        }
+        num_tokens = {}
+        # process scheduled_new_reqs
+        for req in scheduler_output.scheduled_new_reqs:
+            req_id = req.req_id
+            num_tokens[req_id] = (
+                req.num_computed_tokens +
+                scheduler_output.num_scheduled_tokens[req_id]
+            )
+        
+        # process scheduled_cached_reqs
+        cached_reqs = scheduler_output.scheduled_cached_reqs
+        for idx, req_id in enumerate(cached_reqs.req_ids):
+            num_tokens[req_id] = (
+                cached_reqs.num_computed_tokens[idx] +
+                scheduler_output.num_scheduled_tokens[req_id]
+            )
+
+        # num_tokens = {
+        #     req.req_id:
+        #     req.num_computed_tokens +
+        #     scheduler_output.num_scheduled_tokens[req.req_id]
+        #     for req in chain(scheduler_output.scheduled_new_reqs,
+        #                      scheduler_output.scheduled_cached_reqs)
+        # }
         unallocated_req_ids = set(self.num_gpu_computed_tokens.keys() -
                                   self.allocated_req_ids -
                                   scheduler_output.num_scheduled_tokens.keys())
@@ -209,16 +226,27 @@ class CPUOffloadingConnectorScheduler:
                 num_computed_tokens=req.num_computed_tokens,
                 num_gpu_computed_tokens=self.num_gpu_computed_tokens[req_id],
                 num_cpu_computed_tokens=self.num_cpu_computed_tokens[req_id])
-        for new_req in scheduler_output.scheduled_cached_reqs:
-            req_id = new_req.req_id
+                
+        for idx, req_id in enumerate(cached_reqs.req_ids):
             metadata.requests[req_id] = ReqMeta(
-                gpu_block_ids=new_req.new_block_ids[0],
-                cpu_block_ids=new_cpu_block_ids.get(req_id, []),
-                num_scheduled_tokens=scheduler_output.
-                num_scheduled_tokens[req_id],
-                num_computed_tokens=new_req.num_computed_tokens,
-                num_gpu_computed_tokens=new_req.num_computed_tokens,
-                num_cpu_computed_tokens=new_req.num_computed_tokens)
+            gpu_block_ids=cached_reqs.new_block_ids[idx],
+            cpu_block_ids=new_cpu_block_ids.get(req_id, []),
+            num_scheduled_tokens=scheduler_output.
+            num_scheduled_tokens[req_id],
+            num_computed_tokens=cached_reqs.num_computed_tokens[idx],
+            num_gpu_computed_tokens=cached_reqs.num_computed_tokens[idx],
+            num_cpu_computed_tokens=cached_reqs.num_computed_tokens[idx])
+
+        # for new_req in scheduler_output.scheduled_cached_reqs:
+        #     req_id = new_req.req_id
+        #     metadata.requests[req_id] = ReqMeta(
+        #         gpu_block_ids=new_req.new_block_ids[0],
+        #         cpu_block_ids=new_cpu_block_ids.get(req_id, []),
+        #         num_scheduled_tokens=scheduler_output.
+        #         num_scheduled_tokens[req_id],
+        #         num_computed_tokens=new_req.num_computed_tokens,
+        #         num_gpu_computed_tokens=new_req.num_computed_tokens,
+        #         num_cpu_computed_tokens=new_req.num_computed_tokens)
         self.num_gpu_computed_tokens.clear()
         self.num_cpu_computed_tokens.clear()
         self.allocated_req_ids.clear()
@@ -263,8 +291,8 @@ class CPUOffloadingConnectorWorker:
         self.save_thread = threading.Thread(target=self._save_listener)
         self.save_thread.start()
         self.done_sending_count: defaultdict[str, int] = defaultdict(int)
-    
-        
+
+
     def init_metadata_server(self, vllm_config: VllmConfig):
         # context = get_mp_context()
         # self.metadata_process = context.Process(
@@ -278,7 +306,7 @@ class CPUOffloadingConnectorWorker:
         )
         self.metadata_thread.daemon = True
         self.metadata_thread.start()
-    
+
     def _wait_for_metadata_process_start(self):
         # TODO: wait for metadata server to start, add a rpc to check if ready
         import time
@@ -374,12 +402,12 @@ class CPUOffloadingConnectorWorker:
             sending_finished_thread = threading.Thread(target=self._sending_finished, args=(all_done_sending,))
             sending_finished_thread.daemon = True
             sending_finished_thread.start()
-            
+
             return all_done_sending
         else:
             self.tp_group.send_object(done_sending, dst=0)
             return done_sending
-    
+
     def _sending_finished(self, all_done_sending):
         for req_id in all_done_sending:
             logger.debug(f"call cache_and_free_slots for req_id: {req_id}")
@@ -442,3 +470,4 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
             raise ValueError(
                 f"Unknown attention type: {attn_module.attn_type}")
     return kv_cache_spec
+

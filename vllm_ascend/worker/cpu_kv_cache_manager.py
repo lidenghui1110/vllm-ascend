@@ -2,8 +2,7 @@ from collections import defaultdict
 from typing import Optional
 from vllm.utils import sha256, logger
 from vllm.v1.core.block_pool import BlockPool
-from vllm.v1.core.kv_cache_utils import (BlockHash, KVCacheBlock, PrefixCachingMetrics,
-                                         hash_request_tokens)
+from vllm.v1.core.kv_cache_utils import (BlockHash, KVCacheBlock, PrefixCachingMetrics)
 from vllm.v1.kv_cache_interface import KVCacheSpec
 from vllm.v1.core.single_type_kv_cache_manager import (
     get_manager_for_kv_cache_spec)
@@ -71,7 +70,7 @@ class CPUKVCacheManager:
             kv_cache_spec=kv_cache_spec,
             block_pool=self.block_pool,
             kv_cache_group_id=0,
-            caching_hash_fn=self.caching_hash_fn,
+            # caching_hash_fn=self.caching_hash_fn,
         )
         # Record kv block hashes, avoid redundant computation.
         self.req_to_block_hashes: defaultdict[
@@ -95,8 +94,7 @@ class CPUKVCacheManager:
         # if the scheduler has tried to schedule the request before.
         block_hashes = self.req_to_block_hashes[request_id]
         if not block_hashes:
-            block_hashes = hash_request_tokens(self.caching_hash_fn,
-                                               self.block_size, request)
+            block_hashes = request.block_hashes
             self.req_to_block_hashes[request_id] = block_hashes
         max_cache_hit_length = request.num_tokens - 1
         computed_blocks = self.single_type_manager.find_longest_cache_hit(
@@ -142,6 +140,7 @@ class CPUKVCacheManager:
                     num_tokens=num_tokens,
                     new_computed_blocks=new_computed_blocks,
                 ))
+           
             if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
                 self._release_ahead_touch(request_id)
                 self.req_failed_to_allocate[request_id] = True
@@ -174,13 +173,13 @@ class CPUKVCacheManager:
         if not self.req_failed_to_allocate[request_id]:
             self.single_type_manager.cache_blocks(
                 request,
-                self.req_to_block_hashes[request_id],
+                # self.req_to_block_hashes[request_id],
                 self.req_to_num_tokens[request_id],
             )
         self._free_slots(request_id)
         logger.debug(f"delete request {request_id} in cpu_kv_cache_manager req_to_free")
         del self.req_to_free[request_id]
-        
+
     def _free_slots(self, request_id: str):
         # This function is designed to be reentrant.
         self._release_ahead_touch(request_id)
@@ -189,3 +188,5 @@ class CPUKVCacheManager:
         self.req_to_computed_blocks.pop(request_id, None)
         self.req_failed_to_allocate.pop(request_id, None)
         self.req_to_num_tokens.pop(request_id, None)
+
+

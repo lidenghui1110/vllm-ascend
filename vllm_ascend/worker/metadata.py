@@ -253,3 +253,4 @@ class MetadataServerProc:
         finally:
             if metadata_server is not None:
                 metadata_server.shutdown()
+
