@@ -167,7 +167,11 @@ class CPUOffloadingConnectorScheduler:
     def get_num_new_matched_tokens(
             self, request: "Request",
             num_computed_tokens: int) -> tuple[int, bool]:
-        num_cpu_computed_tokens, load_async = self.zmq_rpc_client.call(
+        # get_hash_new_full_blocks is used in requst init. but we don't need it here 
+        # and to fix AttributeError: Can't pickle local object 'get_request_block_hasher.<locals>.request_block_hasher'
+        request.get_hash_new_full_blocks = None
+
+	num_cpu_computed_tokens, load_async = self.zmq_rpc_client.call(
             "get_matched_num_and_touch", request)
         self.num_gpu_computed_tokens[request.request_id] = num_computed_tokens
         self.num_cpu_computed_tokens[
