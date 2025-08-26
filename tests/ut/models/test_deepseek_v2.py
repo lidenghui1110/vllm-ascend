@@ -21,6 +21,7 @@ from transformers import PretrainedConfig
 from vllm.config import CacheConfig
 from vllm.distributed.parallel_state import GroupCoordinator
 from vllm.model_executor.layers.logits_processor import LogitsProcessor
+from vllm.model_executor.layers.vocab_parallel_embedding import ParallelLMHead
 
 from vllm_ascend.models.deepseek_v2 import (
     CustomDeepseekV2DecoderLayer, CustomDeepseekV2ForCausalLM,
@@ -28,7 +29,7 @@ from vllm_ascend.models.deepseek_v2 import (
     CustomDeepseekV2MLP, CustomDeepseekV2MoE,
     CustomDeepseekV2RowParallelLinear,
     CustomDeepseekV2RowParallelLinearReplaceAllreduce,
-    CustomDeepseekV2SiluAndMul, CustomParallelLMHead)
+    CustomDeepseekV2SiluAndMul)
 
 
 @pytest.fixture
@@ -320,7 +321,7 @@ def test_custom_deepseek_v2_for_causal_lm(mock_distributed, vllm_config):
         assert loaded is not None
 
 
-def test_custom_deepseek_v2_lmhead(mock_distributed, vllm_config):
+def test_deepseek_v2_lmhead(mock_distributed, vllm_config):
     model = CustomDeepseekV2ForCausalLM(vllm_config=vllm_config)
 
     if not hasattr(model.model, 'config'):
@@ -332,8 +333,8 @@ def test_custom_deepseek_v2_lmhead(mock_distributed, vllm_config):
                 self.hidden_size = 128
 
         model.model.config = SimpleConfig()
-    lmhead = CustomParallelLMHead(model.model.config.vocab_size,
-                                  model.model.config.hidden_size)
+    lmhead = ParallelLMHead(model.model.config.vocab_size,
+                            model.model.config.hidden_size)
     logits_processor = LogitsProcessor(model.model.config.vocab_size)
 
     input_ids = torch.randint(0, model.model.config.vocab_size, (2, 4))
