@@ -18,6 +18,7 @@
 from typing import Optional, Tuple
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.nn.parameter import Parameter
 from vllm.distributed import divide, tensor_model_parallel_all_reduce
@@ -32,7 +33,8 @@ from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_ascend.distributed.parallel_state import get_lmhead_tp_group
 from vllm_ascend.utils import lmhead_tp_enable
-
+from vllm.distributed.parallel_state import get_dp_group
+from vllm.forward_context import get_forward_context
 
 def get_masked_input_and_mask(
         input_: torch.Tensor, org_vocab_start_index: int,
@@ -61,29 +63,6 @@ def get_masked_input_and_mask(
     return input_, ~vocab_mask
 
 
-def vocab_parallel_embedding_forward(self, input_):
-    if self.tp_size > 1:
-        # Build the mask.
-        masked_input, input_mask = get_masked_input_and_mask(
-            input_, self.shard_indices.org_vocab_start_index,
-            self.shard_indices.org_vocab_end_index,
-            self.shard_indices.num_org_vocab_padding,
-            self.shard_indices.added_vocab_start_index,
-            self.shard_indices.added_vocab_end_index)
-    else:
-        masked_input = input_
-    # Get the embeddings.
-    output_parallel = self.quant_method.embedding(self, masked_input.long())
-    # Mask the output embedding.
-    if self.tp_size > 1:
-        output_parallel.masked_fill_(input_mask.unsqueeze(-1), 0)
-    # Reduce across all the model parallel GPUs.
-    output = tensor_model_parallel_all_reduce(output_parallel)
-    return output
-
-
-VocabParallelEmbedding.forward = vocab_parallel_embedding_forward
-
 
 class AscendVocabParallelEmbedding(VocabParallelEmbedding):
     """
@@ -103,6 +82,8 @@ class AscendVocabParallelEmbedding(VocabParallelEmbedding):
         nn.Module.__init__(self)
 
         if lmhead_tp_enable() and prefix.find("lm_head") != -1:
+            self.comm_group = get_lmhead_tp_group()
+        elif lmhead_tp_enable() and prefix.find("embed_tokens") != -1:
             self.comm_group = get_lmhead_tp_group()
         else:
             self.comm_group = get_tp_group()
@@ -168,6 +149,68 @@ class AscendVocabParallelEmbedding(VocabParallelEmbedding):
                                          self.num_embeddings_padded,
                                          params_dtype=params_dtype,
                                          weight_loader=self.weight_loader)
+    
+    def forward(self, input_):
+        if self.tp_size > 1:
+            return self._forward_embed_tp(input_)
+        else:
+            return self._forward_normal(input_)
+        
+    def _forward_embed_tp(self, input_):
+        cu_tokens_across_dp_cpu = get_forward_context().dp_metadata.cu_tokens_across_dp_cpu
+        
+        global_dp_batch_size = torch.diff(cu_tokens_across_dp_cpu, prepend=cu_tokens_across_dp_cpu.new_zeros(1))
+        print(f"zzh-debug input_: {input_.shape} \n global_dp_batch_size: {global_dp_batch_size}\n ")
+        lmhead_group_batch_size = [global_dp_batch_size[x] for x in get_lmhead_tp_group().ranks]
+        local_batch_size = input_.size(0)
+        gathered_input = [torch.empty(batch_size, dtype=input_.dtype, device='npu') for batch_size in lmhead_group_batch_size]
+        torch.distributed.all_gather(
+            gathered_input, input_, group=get_lmhead_tp_group().device_group)
+        complete_input = torch.cat(gathered_input, dim=0)
+        print(f"all_gather_down complete_input: {complete_input.shape}")
+
+        output = self.quant_method.embedding(self, complete_input.long())
+        input_splits = lmhead_group_batch_size
+        output_splits = [local_batch_size *
+                         self.num_embeddings_per_partition for _ in lmhead_group_batch_size]
+        all_to_all_result = torch.empty(
+            local_batch_size * (self.num_embeddings_per_partition * self.tp_size),
+            dtype=output.dtype, device='npu')
+        print(f"befor all_to_all_single output: {output.shape}")
+        dist.all_to_all_single(
+            all_to_all_result,
+            output,
+            output_splits,
+            input_splits,
+            group=get_lmhead_tp_group().device_group)
+        print(f"after all_to_all_single all_to_all_result: {all_to_all_result.shape}")
+        reshaped = all_to_all_result.view(self.tp_size, local_batch_size, self.num_embeddings_per_partition)
+        output = reshaped.permute(1, 0, 2).reshape(local_batch_size, -1)
+        return output
+
+    def _forward_normal(self, input_):
+        
+        if self.tp_size > 1:
+            # Build the mask.
+            masked_input, input_mask = get_masked_input_and_mask(
+                input_, self.shard_indices.org_vocab_start_index,
+                self.shard_indices.org_vocab_end_index,
+                self.shard_indices.num_org_vocab_padding,
+                self.shard_indices.added_vocab_start_index,
+                self.shard_indices.added_vocab_end_index)
+        else:
+            masked_input = input_
+        # Get the embeddings.
+        output_parallel = self.quant_method.embedding(self, masked_input.long())
+        # Mask the output embedding.
+        if self.tp_size > 1:
+            output_parallel.masked_fill_(input_mask.unsqueeze(-1), 0)
+        # Reduce across all the model parallel GPUs.
+        output = tensor_model_parallel_all_reduce(output_parallel)
+
+        print(f"rank:{get_dp_group().rank_in_group}  forward_normal output:{output.shape}, input:{input_.shape}")
+        return output
+
 
 
 class AscendParallelLMHead(ParallelLMHead):
