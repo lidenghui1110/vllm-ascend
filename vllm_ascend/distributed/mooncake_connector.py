@@ -634,7 +634,7 @@ class MooncakeConnectorScheduler:
 
         # Handshake base port
         self.side_channel_port = (
-            envs_ascend.VLLM_BASE_PORT + 
+            vllm_config.kv_transfer_config.kv_port +
             vllm_config.parallel_config.data_parallel_rank_local *
             vllm_config.parallel_config.tensor_parallel_size)
 
@@ -828,7 +828,7 @@ class MooncakeConnectorWorker:
 
         # Handshake base port
         self.side_channel_port = (
-            envs_ascend.VLLM_BASE_PORT +
+            vllm_config.kv_transfer_config.kv_port +
             vllm_config.parallel_config.data_parallel_rank_local *
             vllm_config.parallel_config.tensor_parallel_size)
         self.handshake_port = self.side_channel_port + self.tp_rank
@@ -905,7 +905,7 @@ class MooncakeConnectorWorker:
         """Initialize the mooncake instance."""
         device_name = device_name if device_name is not None else ""
         ret_value = self.engine.initialize(hostname, "P2PHANDSHAKE",
-                                           envs_ascend.MOONCAKE_CONNECTOR_PROTOCOL,
+                                           "ascend",
                                            device_name)
         if ret_value != 0:
             raise RuntimeError(
