@@ -808,6 +808,8 @@ class MooncakeConnectorScheduler:
             num_d_block_heads = max(1, num_key_value_heads // self._decode_tp_size)
             num_need_pulls = num_d_block_heads // num_p_block_heads
         kv_role = self.vllm_config.kv_transfer_config.kv_role
+        logger.debug("get_finished_count, kv_role=%s, num_need_pulls=%d, decode_tp_size=%d", 
+        kv_role, num_need_pulls, self._decode_tp_size)
         if kv_role == 'kv_producer':
             return num_need_pulls * self._decode_tp_size
         else:
