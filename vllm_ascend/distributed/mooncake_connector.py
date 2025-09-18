@@ -245,6 +245,7 @@ class KVCacheRecvingThread(threading.Thread):
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
         self.task_tracker = KVCacheTaskTracker()
+        self.finished_reqs: dict[str, int] = defaultdict(dict)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.decoder = msgspec.msgpack.Decoder(MooncakeAgentMetadata)
@@ -306,8 +307,6 @@ class KVCacheRecvingThread(threading.Thread):
         request_id = req_meta["request_id"]
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
-        offset = req_meta["offset"]
-        num_need_pulls = req_meta["num_need_pulls"]
 
         try:
             logger.debug(
@@ -323,10 +322,20 @@ class KVCacheRecvingThread(threading.Thread):
             # resource cleanup. Failing to do so may cause a memory leak on the
             # remote host.
             self._send_done_recv_signal(request_id, remote_host, remote_handshake_port)
-            if offset == num_need_pulls - 1:
-                self.task_tracker.update_done_task_count(request_id)
+            self._update_finished_reqs(req_meta)
             self.request_queue.task_done()
+    
+    def _update_finished_reqs(self, req_meta: dict[str, Any]):
+        request_id = req_meta["request_id"]
+        num_need_pulls = req_meta["num_need_pulls"]
+        self.finished_reqs[request_id] += 1
 
+        for req_id in self.finished_reqs.keys():
+            if self.finished_reqs[req_id] == num_need_pulls:
+                self.task_tracker.update_done_task_count(req_id)
+            elif self.finished_reqs[req_id] > num_need_pulls:
+                logger.error(f"Request {req_id} finished {self.finished_reqs[req_id]} times, expect {num_need_pulls} times")
+    
     async def _transfer_kv_cache(self, req_meta: dict[str, Any]):
         """Handle a KV cache transfer request."""
         request_id = req_meta["request_id"]
