@@ -231,6 +231,7 @@ class KVCacheRecvingThread(threading.Thread):
         self.local_handshake_port = local_handshake_port
         self.engine = engine
         self.ready_event = ready_event
+        self.lock = threading.Lock()
 
         self.kv_caches_base_addr: dict[str, dict[int, list[int]]] = \
             defaultdict(dict)
@@ -240,7 +241,8 @@ class KVCacheRecvingThread(threading.Thread):
             defaultdict(dict)
         self.block_len = block_len
 
-        self.request_queue: queue.Queue[Any] = queue.Queue()
+        self.request_queue = deque()
+        # TODO(jianzs): make this configurable
         max_workers = getattr(envs_ascend, 'MAX_TRANSFER_WORKERS', 32)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
@@ -267,16 +269,17 @@ class KVCacheRecvingThread(threading.Thread):
                     offset: int, num_need_pulls: int):
         """Add a new request to the queue for processing."""
         logger.debug(f"Adding request {request_id} to the queue.")
-        self.request_queue.put({
-            "request_id": request_id,
-            "local_block_ids": local_block_ids,
-            "remote_block_ids": remote_block_ids,
-            "remote_engine_id": remote_engine_id,
-            "remote_host": remote_host,
-            "remote_handshake_port": remote_handshake_port,
-            "offset": offset,
-            "num_need_pulls": num_need_pulls
-            })
+        with self.lock:
+            self.request_queue.put({
+                "request_id": request_id,
+                "local_block_ids": local_block_ids,
+                "remote_block_ids": remote_block_ids,
+                "remote_engine_id": remote_engine_id,
+                "remote_host": remote_host,
+                "remote_handshake_port": remote_handshake_port,
+                "offset": offset,
+                "num_need_pulls": num_need_pulls
+                })
 
     def get_and_clear_finished_requests(self) -> set[str]:
         """
@@ -295,11 +298,20 @@ class KVCacheRecvingThread(threading.Thread):
         while True:
             try:
                 request_data = self.request_queue.get()
+                request_id = request_data["request_id"]
+                offset = request_data["offset"]
+                num_need_pulls = request_data["num_need_pulls"]
                 if request_data is None:
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
                     continue
-                asyncio.create_task(self._handle_request(request_data))
+                elif offset < num_need_pulls - 1:
+                    asyncio.create_task(self._handle_request(request_data))
+                elif self.finished_reqs[request_id] == num_need_pulls - 1:
+                    asyncio.create_task(self._handle_request(request_data))
+                else:
+                    with self.lock:
+                        self.request_queue.insert(1, request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
 
