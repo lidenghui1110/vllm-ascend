@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import asyncio
 import contextlib
 import hashlib
 import math
@@ -287,6 +288,9 @@ class KVCacheRecvingThread(threading.Thread):
     def run(self):
         """Run the thread to handle KV cache transfer requests."""
         self.ready_event.set()
+        asyncio.run(self.async_transfer())
+    
+    async def async_transfer(self):
         while True:
             try:
                 request_data = self.request_queue.get()
@@ -294,11 +298,11 @@ class KVCacheRecvingThread(threading.Thread):
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
                     continue
-                self._handle_request(request_data)
+                asyncio.create_task(self._handle_request(request_data))
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
 
-    def _handle_request(self, req_meta: dict[str, Any]):
+    async def _handle_request(self, req_meta: dict[str, Any]):
         request_id = req_meta["request_id"]
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
@@ -308,7 +312,7 @@ class KVCacheRecvingThread(threading.Thread):
         try:
             logger.debug(
                 f"Starting to transfer KV cache for request {request_id}.")
-            self._transfer_kv_cache(req_meta)
+            await self._transfer_kv_cache(req_meta)
             logger.debug(
                 f"Finished transferring KV cache for request {request_id}.")
         except Exception as e:
@@ -323,7 +327,7 @@ class KVCacheRecvingThread(threading.Thread):
                 self.task_tracker.update_done_task_count(request_id)
             self.request_queue.task_done()
 
-    def _transfer_kv_cache(self, req_meta: dict[str, Any]):
+    async def _transfer_kv_cache(self, req_meta: dict[str, Any]):
         """Handle a KV cache transfer request."""
         request_id = req_meta["request_id"]
         remote_block_ids = req_meta["remote_block_ids"]
@@ -375,7 +379,7 @@ class KVCacheRecvingThread(threading.Thread):
                 dst_list.append(dst)
                 length_list.append(length)
 
-        ret = self.engine.batch_transfer_sync_read(session_id, src_list, dst_list,
+        ret = await self.engine.batch_transfer_sync_read(session_id, src_list, dst_list,
                                                 length_list)
         if ret < 0:
             logger.error("Mooncake transfer failed for request %s",
