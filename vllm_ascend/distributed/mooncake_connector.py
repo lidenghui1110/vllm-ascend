@@ -3,7 +3,6 @@ import asyncio
 import contextlib
 import hashlib
 import math
-import queue
 import random
 import socket
 import struct
@@ -305,9 +304,7 @@ class KVCacheRecvingThread(threading.Thread):
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
                     continue
-                elif offset < num_need_pulls - 1:
-                    asyncio.create_task(self._handle_request(request_data))
-                elif self.finished_reqs[request_id] == num_need_pulls - 1:
+                elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
                     asyncio.create_task(self._handle_request(request_data))
                 else:
                     with self.lock:
