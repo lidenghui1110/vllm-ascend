@@ -247,7 +247,7 @@ class KVCacheRecvingThread(threading.Thread):
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
         self.task_tracker = KVCacheTaskTracker()
-        self.finished_reqs: dict[str, int] = defaultdict(dict)
+        self.finished_reqs: dict[str, int] = defaultdict(int)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.decoder = msgspec.msgpack.Decoder(MooncakeAgentMetadata)
@@ -313,7 +313,7 @@ class KVCacheRecvingThread(threading.Thread):
                     await self._handle_request(request_data)
                 else:
                     with self.lock:
-                        time.sleep(5)
+                        time.sleep(10)
                         self.request_queue.put(request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
