@@ -292,6 +292,7 @@ class KVCacheRecvingThread(threading.Thread):
     def run(self):
         """Run the thread to handle KV cache transfer requests."""
         self.ready_event.set()
+        logger.info("KVCacheRecvingThread started.")
         asyncio.run(self.async_transfer())
     
     async def async_transfer(self):
@@ -301,6 +302,8 @@ class KVCacheRecvingThread(threading.Thread):
                 request_id = request_data["request_id"]
                 offset = request_data["offset"]
                 num_need_pulls = request_data["num_need_pulls"]
+                logger.info(f"Received request {request_id} with offset {offset} and num_need_pulls {num_need_pulls}.")
+                logger.info(f"Finished requests: {self.finished_reqs}")
                 if request_data is None:
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
