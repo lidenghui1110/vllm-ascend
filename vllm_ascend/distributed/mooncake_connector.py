@@ -312,6 +312,7 @@ class KVCacheRecvingThread(threading.Thread):
                     asyncio.create_task(self._handle_request(request_data))
                 else:
                     with self.lock:
+                        time.sleep(5)
                         self.request_queue.put(request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
@@ -322,10 +323,10 @@ class KVCacheRecvingThread(threading.Thread):
         remote_handshake_port = req_meta["remote_handshake_port"]
 
         try:
-            logger.debug(
+            logger.info(
                 f"Starting to transfer KV cache for request {request_id}.")
             await self._transfer_kv_cache(req_meta)
-            logger.debug(
+            logger.info(
                 f"Finished transferring KV cache for request {request_id}.")
         except Exception as e:
             logger.error("Failed to transfer KV cache for request "
@@ -342,6 +343,7 @@ class KVCacheRecvingThread(threading.Thread):
         request_id = req_meta["request_id"]
         num_need_pulls = req_meta["num_need_pulls"]
         self.finished_reqs[request_id] += 1
+        logger.info(f"Request {request_id} finished {self.finished_reqs[request_id]} times.")
 
         for req_id in self.finished_reqs.keys():
             if self.finished_reqs[req_id] == num_need_pulls:
@@ -400,7 +402,7 @@ class KVCacheRecvingThread(threading.Thread):
                 src_list.append(src)
                 dst_list.append(dst)
                 length_list.append(length)
-
+        logger.info(f"trans KV cache for request {request_id}.")
         ret = await self.engine.batch_transfer_sync_read(session_id, src_list, dst_list,
                                                 length_list)
         if ret < 0:
