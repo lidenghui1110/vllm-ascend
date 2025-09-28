@@ -309,6 +309,7 @@ class KVCacheRecvingThread(threading.Thread):
                     self.request_queue.task_done()
                     continue
                 elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
+                    logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
                     asyncio.create_task(self._handle_request(request_data))
                 else:
                     with self.lock:
