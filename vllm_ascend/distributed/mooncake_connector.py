@@ -404,7 +404,7 @@ class KVCacheRecvingThread(threading.Thread):
                 dst_list.append(dst)
                 length_list.append(length)
         logger.info(f"trans KV cache for request {request_id}.")
-        ret = await self.engine.batch_transfer_sync_read(session_id, src_list, dst_list,
+        ret = await asyncio.to_thread(self.engine.batch_transfer_sync_read, session_id, src_list, dst_list,
                                                 length_list)
         if ret < 0:
             logger.error("Mooncake transfer failed for request %s",
