@@ -248,6 +248,8 @@ class KVCacheRecvingThread(threading.Thread):
 
         self.task_tracker = KVCacheTaskTracker()
         self.finished_reqs: dict[str, int] = defaultdict(int)
+        # 添加信号量，限制同时处理的传输任务数量为8个
+        self.concurrent_limit = asyncio.Semaphore(32)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.decoder = msgspec.msgpack.Decoder(MooncakeAgentMetadata)
@@ -310,10 +312,11 @@ class KVCacheRecvingThread(threading.Thread):
                     continue
                 elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
                     # logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
-                    await self._handle_request(request_data)
+                    # 使用信号量限制并发数量
+                    async with self.concurrent_limit:
+                        await self._handle_request(request_data)
                 else:
                     with self.lock:
-                        time.sleep(10)
                         self.request_queue.put(request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
