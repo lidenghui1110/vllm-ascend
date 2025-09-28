@@ -241,7 +241,7 @@ class KVCacheRecvingThread(threading.Thread):
             defaultdict(dict)
         self.block_len = block_len
 
-        self.request_queue = queue.Queue()
+        self.request_queue = asyncio.Queue()
         # TODO(jianzs): make this configurable
         max_workers = getattr(envs_ascend, 'MAX_TRANSFER_WORKERS', 32)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -298,7 +298,7 @@ class KVCacheRecvingThread(threading.Thread):
     async def async_transfer(self):
         while True:
             try:
-                request_data = self.request_queue.get()
+                request_data = await self.request_queue.get()
                 request_id = request_data["request_id"]
                 offset = request_data["offset"]
                 num_need_pulls = request_data["num_need_pulls"]
@@ -310,11 +310,12 @@ class KVCacheRecvingThread(threading.Thread):
                     continue
                 elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
                     logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
-                    asyncio.create_task(self._handle_request(request_data))
+                    task = asyncio.create_task(self._handle_request(request_data))
+                    await task
                 else:
                     with self.lock:
-                        time.sleep(5)
-                        self.request_queue.put(request_data)
+                        await time.sleep(5)
+                        await self.request_queue.put(request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
 
