@@ -5,6 +5,7 @@ import hashlib
 import math
 import random
 import socket
+import queue
 import struct
 import threading
 import time
@@ -240,7 +241,7 @@ class KVCacheRecvingThread(threading.Thread):
             defaultdict(dict)
         self.block_len = block_len
 
-        self.request_queue = deque()
+        self.request_queue = queue.Queue()
         # TODO(jianzs): make this configurable
         max_workers = getattr(envs_ascend, 'MAX_TRANSFER_WORKERS', 32)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -308,7 +309,7 @@ class KVCacheRecvingThread(threading.Thread):
                     asyncio.create_task(self._handle_request(request_data))
                 else:
                     with self.lock:
-                        self.request_queue.insert(1, request_data)
+                        self.request_queue.put(request_data)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
 
