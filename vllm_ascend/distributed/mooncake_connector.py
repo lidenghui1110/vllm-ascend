@@ -292,7 +292,7 @@ class KVCacheRecvingThread(threading.Thread):
     def run(self):
         """Run the thread to handle KV cache transfer requests."""
         self.ready_event.set()
-        logger.info("KVCacheRecvingThread started.")
+        # logger.info("KVCacheRecvingThread started.")
         asyncio.run(self.async_transfer())
     
     async def async_transfer(self):
@@ -302,14 +302,14 @@ class KVCacheRecvingThread(threading.Thread):
                 request_id = request_data["request_id"]
                 offset = request_data["offset"]
                 num_need_pulls = request_data["num_need_pulls"]
-                logger.info(f"Received request {request_id} with offset {offset} and num_need_pulls {num_need_pulls}.")
-                logger.info(f"Finished requests: {self.finished_reqs}")
+                # logger.info(f"Received request {request_id} with offset {offset} and num_need_pulls {num_need_pulls}.")
+                # logger.info(f"Finished requests: {self.finished_reqs}")
                 if request_data is None:
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
                     continue
                 elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
-                    logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
+                    # logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
                     await self._handle_request(request_data)
                 else:
                     with self.lock:
@@ -344,7 +344,7 @@ class KVCacheRecvingThread(threading.Thread):
         request_id = req_meta["request_id"]
         num_need_pulls = req_meta["num_need_pulls"]
         self.finished_reqs[request_id] += 1
-        logger.info(f"Request {request_id} finished {self.finished_reqs[request_id]} times.")
+        # logger.info(f"Request {request_id} finished {self.finished_reqs[request_id]} times.")
 
         for req_id in self.finished_reqs.keys():
             if self.finished_reqs[req_id] == num_need_pulls:
@@ -403,7 +403,7 @@ class KVCacheRecvingThread(threading.Thread):
                 src_list.append(src)
                 dst_list.append(dst)
                 length_list.append(length)
-        logger.info(f"trans KV cache for request {request_id}.")
+        # logger.info(f"trans KV cache for request {request_id}.")
         ret = await asyncio.to_thread(self.engine.batch_transfer_sync_read, session_id, src_list, dst_list,
                                                 length_list)
         if ret < 0:
