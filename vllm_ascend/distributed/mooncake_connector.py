@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, List, Optional, OrderedDict, Tuple
 
+from regex import T
+
 import msgspec
 import numpy as np
 import numpy.typing as npt
@@ -241,15 +243,16 @@ class KVCacheRecvingThread(threading.Thread):
             defaultdict(dict)
         self.block_len = block_len
 
-        self.request_queue = queue.Queue()
+        self.sub_request_queue = queue.Queue()
+        self.master_request_queue = queue.Queue()
         # TODO(jianzs): make this configurable
         max_workers = getattr(envs_ascend, 'MAX_TRANSFER_WORKERS', 32)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
 
         self.task_tracker = KVCacheTaskTracker()
         self.finished_reqs: dict[str, int] = defaultdict(int)
-        # 添加信号量，限制同时处理的传输任务数量为8个
-        self.concurrent_limit = asyncio.Semaphore(32)
+        # 添加信号量，限制同时处理的传输任务数量为64个
+        self.concurrent_limit = asyncio.Semaphore(64)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.decoder = msgspec.msgpack.Decoder(MooncakeAgentMetadata)
@@ -271,16 +274,28 @@ class KVCacheRecvingThread(threading.Thread):
                     offset: int, num_need_pulls: int):
         """Add a new request to the queue for processing."""
         logger.debug(f"Adding request {request_id} to the queue.")
+        if not self.num_key_value_heads:
+            self.num_key_value_heads = num_need_pulls
         with self.lock:
-            self.request_queue.put({
+            if offset < self.num_need_pulls - 1:
+                self.sub_request_queue.put({
                 "request_id": request_id,
                 "local_block_ids": local_block_ids,
                 "remote_block_ids": remote_block_ids,
                 "remote_engine_id": remote_engine_id,
                 "remote_host": remote_host,
                 "remote_handshake_port": remote_handshake_port,
-                "offset": offset,
-                "num_need_pulls": num_need_pulls
+                "offset": offset
+                })
+            else:
+                self.master_request_queue.put({
+                "request_id": request_id,
+                "local_block_ids": local_block_ids,
+                "remote_block_ids": remote_block_ids,
+                "remote_engine_id": remote_engine_id,
+                "remote_host": remote_host,
+                "remote_handshake_port": remote_handshake_port,
+                "offset": offset
                 })
 
     def get_and_clear_finished_requests(self) -> set[str]:
@@ -300,28 +315,39 @@ class KVCacheRecvingThread(threading.Thread):
     async def async_transfer(self):
         while True:
             try:
-                request_data = self.request_queue.get()
+                if self.finished_reqs:
+                    temp = []
+                    reput_reqs = []
+                    for req_id, count in self.finished_reqs.items():
+                        if count == self.num_need_pulls - 1:
+                            temp.append(req_id)
+                    for _ in range(self.master_request_queue.qsize()):
+                        req_meta = self.master_request_queue.get()
+                        request_id = req_meta["request_id"]
+                        if request_id in temp:
+                            async with self.concurrent_limit:
+                                await self._handle_request(req_meta, False)    
+                        else:
+                            reput_reqs.append(req_meta)
+                        
+                    with self.lock:
+                        for req_meta in reput_reqs:
+                            self.master_request_queue.put(req_meta)
+
+                request_data = self.sub_request_queue.get()
                 request_id = request_data["request_id"]
-                offset = request_data["offset"]
-                num_need_pulls = request_data["num_need_pulls"]
-                # logger.info(f"Received request {request_id} with offset {offset} and num_need_pulls {num_need_pulls}.")
-                # logger.info(f"Finished requests: {self.finished_reqs}")
                 if request_data is None:
                     logger.warning("Received a None request!")
-                    self.request_queue.task_done()
+                    self.sub_request_queue.task_done()
                     continue
-                elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
-                    # logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
+                else:
                     # 使用信号量限制并发数量
                     async with self.concurrent_limit:
-                        await self._handle_request(request_data)
-                else:
-                    with self.lock:
-                        self.request_queue.put(request_data)
+                        await self._handle_request(request_data, True)
             except Exception as e:
                 logger.error(f"Error in KVCacheTransferThread: {e}")
 
-    async def _handle_request(self, req_meta: dict[str, Any]):
+    async def _handle_request(self, req_meta: dict[str, Any], flag: bool):
         request_id = req_meta["request_id"]
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
@@ -341,7 +367,10 @@ class KVCacheRecvingThread(threading.Thread):
             # remote host.
             self._send_done_recv_signal(request_id, remote_host, remote_handshake_port)
             self._update_finished_reqs(req_meta)
-            self.request_queue.task_done()
+            if flag:
+                self.sub_request_queue.task_done()
+            else:
+                self.master_request_queue.task_done()
     
     def _update_finished_reqs(self, req_meta: dict[str, Any]):
         request_id = req_meta["request_id"]
@@ -352,6 +381,7 @@ class KVCacheRecvingThread(threading.Thread):
         for req_id in self.finished_reqs.keys():
             if self.finished_reqs[req_id] == num_need_pulls:
                 self.task_tracker.update_done_task_count(req_id)
+                self.finished_reqs.pop(req_id)
             elif self.finished_reqs[req_id] > num_need_pulls:
                 logger.error(f"Request {req_id} finished {self.finished_reqs[req_id]} times, expect {num_need_pulls} times")
     
