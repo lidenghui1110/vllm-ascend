@@ -274,8 +274,8 @@ class KVCacheRecvingThread(threading.Thread):
                     offset: int, num_need_pulls: int):
         """Add a new request to the queue for processing."""
         logger.debug(f"Adding request {request_id} to the queue.")
-        if not self.num_key_value_heads:
-            self.num_key_value_heads = num_need_pulls
+        if not self.num_need_pulls:
+            self.num_need_pulls = num_need_pulls
         with self.lock:
             if offset < self.num_need_pulls - 1:
                 self.sub_request_queue.put({
@@ -374,16 +374,15 @@ class KVCacheRecvingThread(threading.Thread):
     
     def _update_finished_reqs(self, req_meta: dict[str, Any]):
         request_id = req_meta["request_id"]
-        num_need_pulls = req_meta["num_need_pulls"]
         self.finished_reqs[request_id] += 1
         # logger.info(f"Request {request_id} finished {self.finished_reqs[request_id]} times.")
 
         for req_id in self.finished_reqs.keys():
-            if self.finished_reqs[req_id] == num_need_pulls:
+            if self.finished_reqs[req_id] == self.num_need_pulls:
                 self.task_tracker.update_done_task_count(req_id)
                 self.finished_reqs.pop(req_id)
-            elif self.finished_reqs[req_id] > num_need_pulls:
-                logger.error(f"Request {req_id} finished {self.finished_reqs[req_id]} times, expect {num_need_pulls} times")
+            elif self.finished_reqs[req_id] > self.num_need_pulls:
+                logger.error(f"Request {req_id} finished {self.finished_reqs[req_id]} times, expect {self.num_need_pulls} times")
     
     async def _transfer_kv_cache(self, req_meta: dict[str, Any]):
         """Handle a KV cache transfer request."""
@@ -394,7 +393,6 @@ class KVCacheRecvingThread(threading.Thread):
         remote_host = req_meta["remote_host"]
         remote_handshake_port = req_meta["remote_handshake_port"]
         offset = req_meta["offset"]
-        self.num_need_pulls = req_meta["num_need_pulls"]
 
         # Full prefix cache hit: do not need to read remote blocks, just notify
         # P worker that we have the blocks we need.
