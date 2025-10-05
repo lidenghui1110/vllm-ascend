@@ -248,8 +248,8 @@ class KVCacheRecvingThread(threading.Thread):
 
         self.task_tracker = KVCacheTaskTracker()
         self.finished_reqs: dict[str, int] = defaultdict(int)
-        # 添加信号量，限制同时处理的传输任务数量为8个
-        self.concurrent_limit = asyncio.Semaphore(32)
+        # # Add semaphore to limit the number of concurrent transfer tasks to 64
+        self.concurrent_limit = asyncio.Semaphore(64)
 
         self.encoder = msgspec.msgpack.Encoder()
         self.decoder = msgspec.msgpack.Decoder(MooncakeAgentMetadata)
@@ -304,15 +304,11 @@ class KVCacheRecvingThread(threading.Thread):
                 request_id = request_data["request_id"]
                 offset = request_data["offset"]
                 num_need_pulls = request_data["num_need_pulls"]
-                # logger.info(f"Received request {request_id} with offset {offset} and num_need_pulls {num_need_pulls}.")
-                # logger.info(f"Finished requests: {self.finished_reqs}")
                 if request_data is None:
                     logger.warning("Received a None request!")
                     self.request_queue.task_done()
                     continue
                 elif offset < num_need_pulls - 1 or self.finished_reqs[request_id] == num_need_pulls - 1:
-                    # logger.info(f"create_task : Request {request_id} is ready to transfer, offset is {offset}")
-                    # 使用信号量限制并发数量
                     async with self.concurrent_limit:
                         await self._handle_request(request_data)
                 else:
@@ -406,7 +402,7 @@ class KVCacheRecvingThread(threading.Thread):
                 src_list.append(src)
                 dst_list.append(dst)
                 length_list.append(length)
-        # logger.info(f"trans KV cache for request {request_id}.")
+        
         ret = await asyncio.to_thread(self.engine.batch_transfer_sync_read, session_id, src_list, dst_list,
                                                 length_list)
         if ret < 0:
