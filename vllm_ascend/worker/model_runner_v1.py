@@ -1543,9 +1543,10 @@ class NPUModelRunner(GPUModelRunner):
         with ProfileExecuteDuration().capture_async("Sample"):
             sampler_output = self._sample(logits, spec_decode_metadata)
 
+        spec_token_ids = None
         def propose_draft_token_ids(sampled_token_ids):
             assert self.spec_decode_common_attn_metadata is not None
-            self._draft_token_ids = self.propose_draft_token_ids(
+            spec_token_ids = self.propose_draft_token_ids(
                 sampled_token_ids,
                 self.input_batch.sampling_metadata,
                 scheduler_output,
@@ -1556,6 +1557,8 @@ class NPUModelRunner(GPUModelRunner):
                 attn_metadata,
                 aux_hidden_states,
             )
+            self._draft_token_ids = spec_token_ids
+            return spec_token_ids
 
         (
             logprobs_lists,
@@ -1581,21 +1584,23 @@ class NPUModelRunner(GPUModelRunner):
                 if use_padded_batch_for_eagle:
                     # EAGLE speculative decoding can use the GPU sampled tokens
                     # as inputs, and does not need to wait for bookkeeping to finish.
-                    propose_draft_token_ids(sampler_output.sampled_token_ids)
+                    spec_token_ids = propose_draft_token_ids(sampler_output.sampled_token_ids)
                 if self.speculative_config and not use_padded_batch_for_eagle:
                     # ngram and other speculative decoding methods use the sampled
                     # tokens on the CPU, so they are run after bookkeeping.
-                    propose_draft_token_ids(valid_sampled_token_ids)
+                    spec_token_ids = propose_draft_token_ids(valid_sampled_token_ids)
 
             if has_kv_transfer_group():
                 get_kv_transfer_group().clear_connector_metadata()
 
         extra_args = ({"kv_connector_output": kv_connector_output})
+        spec_token_ids = None if spec_token_ids is None else spec_token_ids.tolist()
 
         model_runner_output = ModelRunnerOutput(
             req_ids=req_ids_output_copy,
             req_id_to_index=req_id_to_index_output_copy,
             sampled_token_ids=valid_sampled_token_ids,
+            spec_token_ids=spec_token_ids.tolist(),
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
             pooler_output=[],
